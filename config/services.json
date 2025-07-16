@@ -1,0 +1,6 @@
+{
+    "apache_http_port": 80,
+    "apache_https_port": 443,
+    "mysql_port": 3306,
+    "php_version": "8.1"
+}
