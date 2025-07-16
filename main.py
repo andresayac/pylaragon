@@ -1,46 +1,49 @@
-#!/usr/bin/env python3
-import sys
+import os
 from pathlib import Path
-
-# Agregar el directorio actual al path para importar módulos
-sys.path.append(str(Path.cwd()))
-
 from services.service_manager import ServiceManager
 from gui.main_window import LaragonCloneGUI
 
+def create_default_files():
+    """Crea los directorios y archivos por defecto si no existen."""
+    www_path = Path("www")
+    www_path.mkdir(exist_ok=True)
+    
+    index_file = www_path / "index.php"
+    if not index_file.exists():
+        index_content = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to PyLaragon</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f4f4f9; color: #333; text-align: center; margin-top: 50px; }
+        h1 { color: #4CAF50; }
+        div { background: white; padding: 20px; border-radius: 8px; display: inline-block; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>Welcome to PyLaragon!</h1>
+        <p>Your PHP environment is working.</p>
+        <?php phpinfo(); ?>
+    </div>
+</body>
+</html>
+"""
+        with open(index_file, "w", encoding='utf-8') as f:
+            f.write(index_content)
+
 def main():
-    # Verificar que estamos en el directorio correcto
-    base_path = Path.cwd()
+    """Punto de entrada principal de la aplicación."""
+    create_default_files()
     
-    # Crear directorios necesarios
-    directories = ["www", "ssl", "config", "apache", "mysql", "php-8.1"]
-    for directory in directories:
-        (base_path / directory).mkdir(exist_ok=True)
+    service_manager = ServiceManager()
     
-    # Crear archivo index.php por defecto
-    index_php = base_path / "www" / "index.php"
-    if not index_php.exists():
-        with open(index_php, "w") as f:
-            f.write("""<?php
-echo "<h1>¡PyLaragon funcionando!</h1>";
-echo "<p>PHP Version: " . phpversion() . "</p>";
-echo "<p>Server: " . $_SERVER['SERVER_SOFTWARE'] . "</p>";
-phpinfo();
-?>""")
-    
-    # Inicializar el gestor de servicios
-    service_manager = ServiceManager(base_path)
-    
-    # Verificar dependencias
-    missing_deps = service_manager.check_dependencies()
-    if missing_deps:
-        print(f"⚠️  Dependencias faltantes: {', '.join(missing_deps)}")
-        print("Por favor, instala los servicios requeridos en sus respectivos directorios")
-    
-    # Iniciar GUI pasando el service_manager
-    print(service_manager)
-    app = LaragonCloneGUI(service_manager)
-    app.root.mainloop()
+    # Iniciar la GUI
+    gui = LaragonCloneGUI(service_manager)
+    gui.run()
+
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,7 @@ import os
 import threading
 import json
 import time
+import psutil
 from pathlib import Path
 from .apache_manager import ApacheManager
 from .mysql_manager import MySQLManager
@@ -12,204 +13,153 @@ from .ssl_manager import SSLManager
 class ServiceManager:
     def __init__(self, base_path=None):
         self.base_path = Path(base_path) if base_path else Path.cwd()
+        self.bin_path = self.base_path / "bin"
         self.config_path = self.base_path / "config" / "services.json"
         
+        # Estado de servicios y procesos
+        self.processes = {'apache': None, 'mysql': None}
+        self.service_status_callback = None
+
+        # Cargar configuración o crear una por defecto
+        self.config = self.load_config()
+
         # Inicializar gestores de servicios
-        self.apache_manager = ApacheManager(self.base_path)
-        self.mysql_manager = MySQLManager(self.base_path)
-        self.php_manager = PHPManager(self.base_path)
+        self.php_manager = PHPManager(self.bin_path, self.config.get('php_version', '8.1'))
+        self.apache_manager = ApacheManager(self.bin_path, self.php_manager, self.config)
+        self.mysql_manager = MySQLManager(self.bin_path, self.config)
         self.ssl_manager = SSLManager(self.base_path)
-        
-        # Estado de servicios
-        self.services_status = {
-            'apache': False,
-            'mysql': False,
-            'php': False
-        }
-        
-        # Cargar configuración
-        self.load_config()
-        
+
     def load_config(self):
-        """Carga la configuración desde archivo JSON"""
+        """Carga la configuración desde archivo JSON o crea una por defecto."""
         try:
             if self.config_path.exists() and self.config_path.stat().st_size > 0:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if content:  # Verificar que no esté vacío
-                        config = json.loads(content)
-                        # Aplicar configuración cargada
-                        self.apache_manager.port_http = config.get('apache_http_port', 80)
-                        self.apache_manager.port_https = config.get('apache_https_port', 443)
-                        self.mysql_manager.port = config.get('mysql_port', 3306)
-                        print("✅ Configuración cargada correctamente")
-                    else:
-                        print("⚠️  Archivo de configuración vacío, creando configuración por defecto")
-                        self.save_config()
-            else:
-                print("📝 Creando archivo de configuración por defecto")
-                self.save_config()
+                    print("✅ Configuración cargada correctamente.")
+                    return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError) as e:
-            print(f"⚠️  Error cargando configuración: {e}")
-            print("📝 Creando configuración por defecto")
-            self.save_config()
-        except Exception as e:
-            print(f"❌ Error inesperado cargando configuración: {e}")
-            self.save_config()
-    
-    def save_config(self):
-        """Guarda la configuración actual"""
-        try:
-            config = {
-                'apache_http_port': getattr(self.apache_manager, 'port_http', 80),
-                'apache_https_port': getattr(self.apache_manager, 'port_https', 443),
-                'mysql_port': getattr(self.mysql_manager, 'port', 3306),
-                'php_version': getattr(self.php_manager, 'version', '8.1')
-            }
-            
-            # Crear directorio config si no existe
-            self.config_path.parent.mkdir(exist_ok=True)
-            
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-            
-            print("✅ Configuración guardada correctamente")
-            
-        except Exception as e:
-            print(f"❌ Error guardando configuración: {e}")
-    
-    def start_service(self, service_name):
-        """Inicia un servicio específico"""
-        try:
-            if service_name == 'apache':
-                self.apache_manager.start()
-                self.services_status['apache'] = True
-                print("✅ Apache iniciado correctamente")
-                
-            elif service_name == 'mysql':
-                self.mysql_manager.start()
-                self.services_status['mysql'] = True
-                print("✅ MySQL iniciado correctamente")
-                
-            elif service_name == 'php':
-                self.php_manager.configure()
-                self.services_status['php'] = True
-                print("✅ PHP configurado correctamente")
-                
-            else:
-                raise ValueError(f"Servicio desconocido: {service_name}")
-                
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error iniciando {service_name}: {e}")
-            return False
-    
-    def stop_service(self, service_name):
-        """Detiene un servicio específico"""
-        try:
-            if service_name == 'apache':
-                self.apache_manager.stop()
-                self.services_status['apache'] = False
-                print("🛑 Apache detenido")
-                
-            elif service_name == 'mysql':
-                self.mysql_manager.stop()
-                self.services_status['mysql'] = False
-                print("🛑 MySQL detenido")
-                
-            elif service_name == 'php':
-                # PHP no necesita ser "detenido" como tal
-                self.services_status['php'] = False
-                print("🛑 PHP desactivado")
-                
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error deteniendo {service_name}: {e}")
-            return False
-    
-    def restart_service(self, service_name):
-        """Reinicia un servicio"""
-        print(f"🔄 Reiniciando {service_name}...")
-        self.stop_service(service_name)
-        time.sleep(2)  # Esperar un poco
-        return self.start_service(service_name)
-    
-    def start_all_services(self):
-        """Inicia todos los servicios"""
-        print("🚀 Iniciando todos los servicios...")
+            print(f"⚠️  Error cargando configuración: {e}. Creando una por defecto.")
         
-        # Iniciar en orden específico
-        services_order = ['mysql', 'php', 'apache']
-        
-        for service in services_order:
-            if not self.start_service(service):
-                print(f"❌ Falló al iniciar {service}, deteniendo proceso")
-                return False
-                
-        print("✅ Todos los servicios iniciados correctamente")
-        return True
-    
-    def stop_all_services(self):
-        """Detiene todos los servicios"""
-        print("🛑 Deteniendo todos los servicios...")
-        
-        # Detener en orden inverso
-        services_order = ['apache', 'mysql', 'php']
-        
-        for service in services_order:
-            self.stop_service(service)
-            
-        print("✅ Todos los servicios detenidos")
-    
-    def get_service_status(self, service_name):
-        """Obtiene el estado de un servicio"""
-        return self.services_status.get(service_name, False)
-    
-    def get_all_status(self):
-        """Obtiene el estado de todos los servicios"""
-        return self.services_status.copy()
-    
-    def is_port_available(self, port):
-        """Verifica si un puerto está disponible"""
-        import socket
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('localhost', port))
-                return True
-        except OSError:
-            return False
-    
-    def check_dependencies(self):
-        """Verifica que todas las dependencias estén disponibles"""
-        dependencies = {
-            'apache': self.apache_manager.apache_path / "bin" / "httpd.exe",  # Windows
-            'mysql': self.mysql_manager.mysql_path / "bin" / "mysqld.exe",   # Windows
-            'php': self.php_manager.php_path / "php.exe"                     # Windows
+        # Configuración por defecto
+        default_config = {
+            'apache_http_port': 80,
+            'apache_https_port': 443,
+            'mysql_port': 3306,
+            'php_version': self.find_php_versions()[0] if self.find_php_versions() else '8.1'
         }
+        self.save_config(default_config)
+        return default_config
+
+    def save_config(self, config_data=None):
+        """Guarda la configuración actual."""
+        if config_data is None:
+            config_data = self.config
         
-        # Si no es Windows, probar sin .exe
-        if os.name != 'nt':
-            dependencies = {
-                'apache': self.apache_manager.apache_path / "bin" / "httpd",
-                'mysql': self.mysql_manager.mysql_path / "bin" / "mysqld",
-                'php': self.php_manager.php_path / "php"
-            }
+        self.config_path.parent.mkdir(exist_ok=True)
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4, ensure_ascii=False)
+        print("✅ Configuración guardada.")
+
+    def find_php_versions(self):
+        """Encuentra las versiones de PHP disponibles en el directorio bin/php."""
+        php_dir = self.bin_path / "php"
+        if not php_dir.is_dir():
+            return []
+        return sorted([d.name for d in php_dir.iterdir() if d.is_dir()])
+
+    def switch_php_version(self, version):
+        """Cambia la versión de PHP y reinicia Apache si está activo."""
+        print(f"🔄 Cambiando a PHP versión {version}...")
+        self.php_manager.set_version(version)
+        self.apache_manager.update_php_manager(self.php_manager)
+        self.config['php_version'] = version
+        self.save_config()
         
-        missing = []
-        for service, path in dependencies.items():
-            if not path.exists():
-                missing.append(service)
-        
-        return missing
-    
-    def setup_ssl(self, domain="localhost"):
-        """Configura SSL para el dominio especificado"""
+        if self.get_service_status('apache'):
+            self.restart_service('apache')
+        print(f"✅ Versión de PHP cambiada a {version}.")
+
+    def _run_service(self, service_name, cmd):
+        """Inicia un proceso de servicio y lo monitorea."""
         try:
-            self.ssl_manager.generate_self_signed_cert(domain)
-            print(f"✅ Certificado SSL generado para {domain}")
-            return True
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.processes[service_name] = process
+            
+            # Hilo para monitorear la salida del proceso
+            threading.Thread(target=self._monitor_output, args=(process, service_name), daemon=True).start()
+            
+            # Hilo para monitorear el estado del proceso
+            threading.Thread(target=self._monitor_process, args=(process, service_name), daemon=True).start()
+            
+            print(f"✅ {service_name.capitalize()} iniciado (PID: {process.pid}).")
+            if self.service_status_callback:
+                self.service_status_callback(service_name, True)
         except Exception as e:
-            print(f"❌ Error generando SSL: {e}")
-            return False
+            print(f"❌ Error al iniciar {service_name}: {e}")
+            if self.service_status_callback:
+                self.service_status_callback(service_name, False)
+
+    def _monitor_output(self, process, service_name):
+        """Lee la salida de un proceso para depuración."""
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                print(f"[{service_name}]: {line.strip()}")
+
+    def _monitor_process(self, process, service_name):
+        """Monitorea si el proceso sigue vivo."""
+        process.wait()
+        print(f"🛑 {service_name.capitalize()} se ha detenido.")
+        self.processes[service_name] = None
+        if self.service_status_callback:
+            self.service_status_callback(service_name, False)
+
+    def start_service(self, service_name):
+        """Inicia un servicio específico."""
+        if self.get_service_status(service_name):
+            print(f"⚠️ {service_name.capitalize()} ya está en ejecución.")
+            return
+
+        print(f"🚀 Iniciando {service_name.capitalize()}...")
+        if service_name == 'apache':
+            self.apache_manager.configure()
+            cmd = self.apache_manager.get_start_command()
+        elif service_name == 'mysql':
+            self.mysql_manager.configure()
+            cmd = self.mysql_manager.get_start_command()
+        else:
+            raise ValueError(f"Servicio desconocido: {service_name}")
+            
+        threading.Thread(target=self._run_service, args=(service_name, cmd), daemon=True).start()
+
+    def stop_service(self, service_name):
+        """Detiene un servicio específico por su PID."""
+        print(f"🛑 Deteniendo {service_name.capitalize()}...")
+        process = self.processes.get(service_name)
+        if process and process.poll() is None:
+            try:
+                parent = psutil.Process(process.pid)
+                for child in parent.children(recursive=True):
+                    child.terminate()
+                parent.terminate()
+                process.wait(timeout=5)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired) as e:
+                print(f"⚠️ No se pudo detener {service_name} de forma elegante: {e}. Forzando terminación.")
+                process.kill()
+            self.processes[service_name] = None
+        else:
+            print(f"⚠️ {service_name.capitalize()} no estaba en ejecución.")
+
+    def restart_service(self, service_name):
+        """Reinicia un servicio."""
+        if self.get_service_status(service_name):
+            self.stop_service(service_name)
+            time.sleep(3) # Dar tiempo para que los puertos se liberen
+        self.start_service(service_name)
+
+    def get_service_status(self, service_name):
+        """Verifica si el proceso del servicio está activo."""
+        process = self.processes.get(service_name)
+        return process and process.poll() is None
+        
+    def set_status_callback(self, callback):
+        """Establece una función de callback para actualizar la GUI."""
+        self.service_status_callback = callback
